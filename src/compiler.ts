@@ -188,7 +188,7 @@ export function compile(request: CompileRequest): CompileResult {
   // Initialisers use a shared context just like all generated functions.
   const initialisation = initialisers.map(line => line.replaceAll("(ctx,", "(&ctx,").replaceAll("(ctx)", "(&ctx)"));
   outputs.set("src/lib.rs", [
-    "#![no_std]", "#![allow(non_snake_case, non_camel_case_types, unused_variables, unused_mut, unused_imports, unused_parens, unused_labels)]",
+    "#![no_std]", "#![forbid(unsafe_code)]", "#![allow(non_snake_case, non_camel_case_types, unused_variables, unused_mut, unused_imports, unused_parens, unused_labels)]",
     "pub mod numbers;", "pub use numbers::Numeric;", handles, ...modules, "",
     "pub trait Platform {", ...platformMethods, "}", "",
     "pub struct Globals {", ...globalFields, "}", "",

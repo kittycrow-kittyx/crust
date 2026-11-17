@@ -50,7 +50,7 @@ test("emits and executes a multi-module freestanding Rust crate", () => {
     assert.equal(result.files, 2);
     assert.equal(result.functions, 6);
     const lib = fs.readFileSync(path.join(p.outputDir, "src/lib.rs"), "utf8");
-    assert.match(lib, /#!\[no_std\]/);
+    assert.ok(lib.startsWith("#![no_std]\n#![forbid(unsafe_code)]\n"));
     const tests = path.join(p.outputDir, "tests");
     fs.mkdirSync(tests);
     fs.writeFileSync(path.join(tests, "smoke.rs"), [
@@ -65,6 +65,17 @@ test("emits and executes a multi-module freestanding Rust crate", () => {
     ].join("\n"));
     const cargo = spawnSync("cargo", ["test", "--offline", "--manifest-path", path.join(p.outputDir, "Cargo.toml")], { encoding: "utf8" });
     assert.equal(cargo.status, 0, cargo.error?.message ?? cargo.stderr);
+    const modulePath = path.join(p.outputDir, "src/native/kernel.rs");
+    const original = fs.readFileSync(modulePath, "utf8");
+    try {
+      fs.appendFileSync(modulePath, "\n#[allow(unsafe_code)] pub unsafe fn unsafe_probe() {}\n");
+      const rejected = spawnSync("cargo", ["check", "--offline", "--lib", "--manifest-path", path.join(p.outputDir, "Cargo.toml")], { encoding: "utf8" });
+      assert.equal(rejected.error, undefined, rejected.error?.message);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /forbid.*unsafe_code|incompatible with previous forbid/i);
+    } finally {
+      fs.writeFileSync(modulePath, original);
+    }
     fs.mkdirSync("build", { recursive: true });
     const published = path.resolve("build/fixture");
     fs.rmSync(published, { recursive: true, force: true });

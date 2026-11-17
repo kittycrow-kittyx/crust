@@ -25,8 +25,10 @@ cargo check --manifest-path build/rei/Cargo.toml
 ## Contract
 
 Crust consumes Bake manifest schema 1 and native intrinsic ABI 1. Generated
-modules contain native Rust functions and use `#![no_std]`. No JavaScript
-runtime is linked. The generated crate exposes a platform trait for memory,
+modules contain native Rust functions and use `#![no_std]` and
+`#![forbid(unsafe_code)]`. The prohibition applies to the entire generated
+crate and cannot be relaxed in a submodule. Any necessary unsafe platform
+implementation must live outside that crate. No JavaScript runtime is linked. The generated crate exposes a platform trait for memory,
 atomics, traps and other platform capabilities. A platform implementation and
 boot integration are required to execute the kernel.
 
