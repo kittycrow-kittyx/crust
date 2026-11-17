@@ -36,6 +36,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: kitty-crow/thistle
+          ref: 19a571d6da85f63256041766d5200ad50e825423
           path: thistle
       - uses: actions/setup-node@v4
         with:
@@ -44,10 +45,12 @@ jobs:
       - run: npm install --prefix crust && npm install --prefix bake
       - run: npm run build --prefix crust
       - run: node crust/dist/src/thistle-project.js thistle
-      - run: cd bake && bun src/cli.ts --project ../thistle/tsconfig.crust.json --out-dir build/bake-rust --target=rust
+      - run: cd bake && bun src/cli.ts --project ../thistle/tsconfig.crust.json --out-dir build/bake-rust --target=rust --engine=host
       - run: node crust/dist/src/cli.js --manifest thistle/build/bake-rust/bake-manifest.json --out-dir crust/build/rei
-      - name: Check Thistle's generated Rust
+      - name: Build Thistle's generated Rust without warnings
+        env:
+          RUSTFLAGS: -D warnings
         run: |
           rustup target add x86_64-unknown-none aarch64-unknown-none
-          cargo check --manifest-path crust/build/rei/Cargo.toml --target x86_64-unknown-none --lib
-          cargo check --manifest-path crust/build/rei/Cargo.toml --target aarch64-unknown-none --lib
+          cargo build --release -j 2 --manifest-path crust/build/rei/Cargo.toml --target x86_64-unknown-none --lib
+          cargo build --release -j 2 --manifest-path crust/build/rei/Cargo.toml --target aarch64-unknown-none --lib
