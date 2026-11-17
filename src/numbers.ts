@@ -44,6 +44,18 @@ pub fn shr(a: f64, b: f64) -> f64 { (to_i32(a) >> (to_u32(b) & 31)) as f64 }
 pub fn ushr(a: f64, b: f64) -> f64 { (to_u32(a) >> (to_u32(b) & 31)) as f64 }
 pub fn imul(a: f64, b: f64) -> f64 { to_i32(a).wrapping_mul(to_i32(b)) as f64 }
 
+pub fn compare_number_bigint(a: f64, b: i128) -> Option<core::cmp::Ordering> {
+    use core::cmp::Ordering;
+    if a.is_nan() { return None; }
+    if a >= -(i128::MIN as f64) { return Some(Ordering::Greater); }
+    if a < i128::MIN as f64 { return Some(Ordering::Less); }
+    let integral = trunc(a);
+    match (integral as i128).cmp(&b) {
+        Ordering::Equal if a < integral => Some(Ordering::Less),
+        Ordering::Equal if a > integral => Some(Ordering::Greater),
+        other => Some(other),
+    }
+}
 pub fn bigint(value: Numeric) -> i128 {
     match value {
         Numeric::BigInt(value) => value,

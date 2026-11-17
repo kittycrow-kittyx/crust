@@ -93,6 +93,14 @@ export class Emitter {
     const eq = op === "===" || op === "!==";
     if (a !== b) {
       if (eq && numeric.has(a) && numeric.has(b)) return "{ let _ = " + left + "; let _ = " + right + "; " + (op === "!==" ? "true" : "false") + " }";
+      if (numeric.has(a) && numeric.has(b) && ["<", ">", "<=", ">="].includes(op)) {
+        const relation = a === "f64" ? op : ({ "<": ">", ">": "<", "<=": ">=", ">=": "<=" } as Record<string, string>)[op]!;
+        const method = relation === "<" ? "is_lt" : relation === ">" ? "is_gt" : relation === "<=" ? "is_le" : "is_ge";
+        // Both operands retain their original evaluation order.
+        const l = this.ctx.temp(), r = this.ctx.temp();
+        return "{ let " + l + " = " + left + "; let " + r + " = " + right + "; numbers::compare_number_bigint(" +
+          (a === "f64" ? l + ", " + r : r + ", " + l) + ").is_some_and(|order| order." + method + "()) }";
+      }
       return this.ctx.fail(node, "CU209", "mixed operands " + a + " " + op + " " + b);
     }
     if (eq && (numeric.has(a) || a === "bool" || a === "&'static str"))
