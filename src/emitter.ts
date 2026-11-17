@@ -198,10 +198,10 @@ export class Emitter {
   private variables(list: ts.VariableDeclarationList): string {
     const mutable = !(list.flags & ts.NodeFlags.Const);
     return list.declarations.map(decl => {
-      if (!ts.isIdentifier(decl.name) || !decl.initializer)
-        return this.ctx.fail(decl, "CU221", "local requires a named initialised binding");
+      if (!ts.isIdentifier(decl.name) || (!decl.type && !decl.initializer))
+        return this.ctx.fail(decl, "CU221", "local requires a named typed binding");
       const type = this.ctx.rustType(decl.type, decl.name);
-      return "let " + (mutable ? "mut " : "") + identifier(decl.name.text) + ": " + type + " = " + this.expression(decl.initializer, type) + ";\n";
+      return "let " + (mutable ? "mut " : "") + identifier(decl.name.text) + ": " + type + (decl.initializer ? " = " + this.expression(decl.initializer, type) : "") + ";\n";
     }).join("");
   }
 
