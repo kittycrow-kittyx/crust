@@ -1,6 +1,6 @@
 # Crust
 
-Crust: Rust Using Statically Typed TypeScript.
+Crust makes Rust Using Statically Typed TypeScript.
 
 Crust translates Bake's `--target=rust` output into a freestanding Rust library.
 Thistle remains the canonical kernel source.
