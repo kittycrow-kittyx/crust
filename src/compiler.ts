@@ -109,7 +109,7 @@ export function compile(request: CompileRequest): CompileResult {
       getCanonicalFileName: name => name, getCurrentDirectory: () => root, getNewLine: () => "\n"
     }));
   }
-  const ctx = new Context(program, root);
+  const ctx: Context = new Context(program, root);
   const emitter = new Emitter(ctx);
   const sources = paths.map(file => {
     const source = program.getSourceFile(file);
