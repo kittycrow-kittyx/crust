@@ -5,7 +5,8 @@ const args = process.argv.slice(2);
 function option(name: string): string | null {
   const index = args.indexOf(name);
   if (index >= 0) return args[index + 1] ?? null;
-  return args.find(arg => arg.startsWith(name + "="))?.slice(name.length + 1) ?? null;
+  const prefix = args.find(arg => arg.startsWith(name + "=")) ?? null;
+  return prefix ? prefix.slice(name.length + 1) : null;
 }
 const usage = "Usage: crust --manifest build/bake-rust/bake-manifest.json --out-dir build/rei-rust";
 function main(): void {
@@ -24,7 +25,7 @@ function main(): void {
     const result = compile({ manifestPath, outputDir });
     process.stdout.write("Crust: emitted " + result.functions + " functions across " + result.files + " modules to " + result.outputPath + "\n");
   } catch (error) {
-    process.stderr.write((error instanceof Error ? error.message : String(error)) + "\n");
+    process.stderr.write((error instanceof Error ? error.message : "Non-Error value thrown by compiler") + "\n");
     process.exitCode = 1;
   }
 }

@@ -64,13 +64,13 @@ test("emits and executes a multi-module freestanding Rust crate", () => {
       "}"
     ].join("\n"));
     const cargo = spawnSync("cargo", ["test", "--offline", "--manifest-path", path.join(p.outputDir, "Cargo.toml")], { encoding: "utf8" });
-    assert.equal(cargo.status, 0, cargo.error?.message ?? cargo.stderr);
+    assert.equal(cargo.status, 0, (cargo.error ?? new Error(cargo.stderr)).message);
     const modulePath = path.join(p.outputDir, "src/native/kernel.rs");
     const original = fs.readFileSync(modulePath, "utf8");
     try {
       fs.appendFileSync(modulePath, "\n#[allow(unsafe_code)] pub unsafe fn unsafe_probe() {}\n");
       const rejected = spawnSync("cargo", ["check", "--offline", "--lib", "--manifest-path", path.join(p.outputDir, "Cargo.toml")], { encoding: "utf8" });
-      assert.equal(rejected.error, undefined, rejected.error?.message);
+      assert.equal(rejected.error ?? null, null);
       assert.notEqual(rejected.status, 0);
       assert.match(rejected.stderr, /forbid.*unsafe_code|incompatible with previous forbid/i);
     } finally {
@@ -88,8 +88,10 @@ test("rejects mutable globals and wrong target without publishing", () => {
   try {
     assert.throws(() => compile(p), /CU303/);
     assert.equal(fs.existsSync(p.outputDir), false);
-    const manifest = JSON.parse(fs.readFileSync(p.manifestPath, "utf8"));
-    manifest.target.backend = "clang";
+    const manifest = decodeManifest(fs.readFileSync(p.manifestPath, "utf8"));
+    const target = manifest.target ?? null;
+    if (!isObject(target)) throw new Error("Missing manifest target");
+    target.backend = "clang";
     fs.writeFileSync(p.manifestPath, JSON.stringify(manifest));
     assert.throws(() => compile(p), /CU001/);
   } finally { fs.rmSync(p.root, { recursive: true, force: true }); }
@@ -106,3 +108,13 @@ test("rejects unsupported syntax without replacing previous output", () => {
     assert.equal(fs.readFileSync(path.join(p.outputDir, "src/input.rs"), "utf8"), prior);
   } finally { fs.rmSync(p.root, { recursive: true, force: true }); }
 });
+
+type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
+interface JsonObject { [key: string]: JsonValue; }
+const decode: (text: string) => JsonValue = JSON.parse;
+function isObject(value: JsonValue): value is JsonObject { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function decodeManifest(text: string): JsonObject {
+  const value = decode(text);
+  if (!isObject(value)) throw new Error("Invalid test manifest");
+  return value;
+}

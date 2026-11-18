@@ -31,6 +31,12 @@ const handles = [
     "#[derive(Clone, Copy)] pub struct __bake_c_" + name + " { pub buffer: __bake_c_Buffer, pub length: f64 }")
 ].join("\n");
 
+function typeOnly(stmt: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
+  if (ts.isExportDeclaration(stmt)) return stmt.isTypeOnly;
+  const clause = stmt.importClause ?? null;
+  return clause !== null && clause.isTypeOnly;
+}
+
 function sourceOrder(sources: readonly ts.SourceFile[], ctx: Context): ts.SourceFile[] {
   const files = new Map(sources.map(source => [path.resolve(source.fileName), source]));
   const visited = new Set<ts.SourceFile>();
@@ -39,11 +45,12 @@ function sourceOrder(sources: readonly ts.SourceFile[], ctx: Context): ts.Source
     if (visited.has(source)) return;
     visited.add(source);
     for (const stmt of source.statements) {
-      if ((!ts.isImportDeclaration(stmt) && !ts.isExportDeclaration(stmt)) ||
-          !stmt.moduleSpecifier || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
-      if (ts.isImportDeclaration(stmt) && stmt.importClause?.isTypeOnly || ts.isExportDeclaration(stmt) && stmt.isTypeOnly) continue;
-      const resolved = ts.resolveModuleName(stmt.moduleSpecifier.text, source.fileName, options, ts.sys).resolvedModule;
-      const dependency = resolved && files.get(path.resolve(resolved.resolvedFileName));
+      if (!ts.isImportDeclaration(stmt) && !ts.isExportDeclaration(stmt)) continue;
+      const specifier = stmt.moduleSpecifier ?? null;
+      if (!specifier || !ts.isStringLiteral(specifier)) continue;
+      if (typeOnly(stmt)) continue;
+      const resolved = ts.resolveModuleName(specifier.text, source.fileName, options, ts.sys).resolvedModule ?? null;
+      const dependency = resolved ? files.get(path.resolve(resolved.resolvedFileName)) ?? null : null;
       if (!dependency) ctx.fail(stmt, "CU301", "external module");
       visit(dependency);
     }
@@ -67,18 +74,16 @@ function publish(destination: string, outputs: ReadonlyMap<string, string>): voi
       fs.writeFileSync(file, content.endsWith("\n") ? content : content + "\n");
     }
     if (fs.existsSync(destination)) fs.renameSync(destination, backup);
-    try { fs.renameSync(stage, destination); }
-    catch (error) {
-      if (fs.existsSync(backup)) fs.renameSync(backup, destination);
-      throw error;
-    }
+    let published = false;
+    try { fs.renameSync(stage, destination); published = true; }
+    finally { if (!published && fs.existsSync(backup)) fs.renameSync(backup, destination); }
     fs.rmSync(backup, { recursive: true, force: true });
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
 function registerFunction(ctx: Context, source: ts.SourceFile, statement: ts.FunctionDeclaration, name: ts.Identifier): void {
   const intrinsic = name.text.startsWith("__bake_c_");
-  if (intrinsic === Boolean(statement.body)) ctx.fail(statement, "CU302", "unexpected function body or ambient declaration");
+  if (intrinsic === Boolean(statement.body ?? null)) ctx.fail(statement, "CU302", "unexpected function body or ambient declaration");
   ctx.register(name, { name: intrinsic ? name.text : ctx.module(source) + "::" + identifier(name.text),
     kind: intrinsic ? "intrinsic" : "function", declaration: statement });
 }
@@ -86,14 +91,18 @@ function registerFunction(ctx: Context, source: ts.SourceFile, statement: ts.Fun
 function registerGlobals(ctx: Context, source: ts.SourceFile, statement: ts.VariableStatement): void {
   if (!(statement.declarationList.flags & ts.NodeFlags.Const)) ctx.fail(statement, "CU303", "mutable module global unsupported");
   for (const decl of statement.declarationList.declarations) {
-    if (!ts.isIdentifier(decl.name) || !decl.initializer) ctx.fail(decl, "CU304", "global requires a named initialiser");
+    if (!ts.isIdentifier(decl.name) || !(decl.initializer ?? null)) ctx.fail(decl, "CU304", "global requires a named initialiser");
     ctx.register(decl.name, { name: ctx.module(source) + "__" + identifier(decl.name.text), kind: "global", declaration: decl });
   }
 }
 
 function registerStatement(ctx: Context, source: ts.SourceFile, statement: ts.Statement): void {
   if (ts.isInterfaceDeclaration(statement)) return ctx.register(statement.name, { name: ctx.recordName(statement), kind: "record", declaration: statement });
-  if (ts.isFunctionDeclaration(statement) && statement.name) return registerFunction(ctx, source, statement, statement.name);
+  if (ts.isFunctionDeclaration(statement)) {
+    const name = statement.name ?? null;
+    if (!name) ctx.fail(statement, "CU305", "anonymous function declaration");
+    return registerFunction(ctx, source, statement, name);
+  }
   if (ts.isVariableStatement(statement)) return registerGlobals(ctx, source, statement);
   if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEmptyStatement(statement)) return;
   ctx.fail(statement, "CU305", "unsupported module statement " + ts.SyntaxKind[statement.kind]);
@@ -130,7 +139,7 @@ export function compile(request: CompileRequest): CompileResult {
   const ctx: Context = new Context(program, root);
   const emitter = new Emitter(ctx);
   const sources = paths.map(file => {
-    const source = program.getSourceFile(file);
+    const source = program.getSourceFile(file) ?? null;
     if (!source || source.isDeclarationFile) throw new Error("CU005: missing implementation " + file);
     return source;
   });
@@ -145,7 +154,7 @@ export function compile(request: CompileRequest): CompileResult {
   const emitGlobals = (statement: ts.VariableStatement): void => {
     for (const decl of statement.declarationList.declarations) {
       const entry = ctx.entry(decl.name);
-      const initializer = decl.initializer;
+      const initializer = decl.initializer ?? null;
       if (!entry || !initializer) ctx.fail(decl, "CU304", "unresolved global initialiser");
       const type = ctx.rustType(decl.type ?? null, decl.name);
       globalFields.push("    pub(crate) " + entry.name + ": Option<" + type + ">,");
@@ -161,7 +170,7 @@ export function compile(request: CompileRequest): CompileResult {
     const parameters = decl.parameters.map(param => {
       if (!ts.isIdentifier(param.name)) ctx.fail(param, "CU306", "invalid intrinsic parameter");
       const type = ctx.parameterType(param);
-      return identifier(param.name.text) + ": " + (param.questionToken ? "Option<" + type + ">" : type);
+      return identifier(param.name.text) + ": " + ((param.questionToken ?? null) ? "Option<" + type + ">" : type);
     });
     platformMethods.push("    fn " + entry.name + "(&self" + (parameters.length ? ", " + parameters.join(", ") : "") + ") -> " + ctx.returnType(decl) + ";");
   }
@@ -173,8 +182,8 @@ export function compile(request: CompileRequest): CompileResult {
     for (const statement of source.statements) {
       if (ts.isInterfaceDeclaration(statement) && !statement.name.text.startsWith("__bake_c_")) {
         const fields = statement.members.map(field => {
-          if (!ts.isPropertySignature(field) || !ts.isIdentifier(field.name) || !field.type ||
-              field.questionToken || !field.modifiers?.some(mod => mod.kind === ts.SyntaxKind.ReadonlyKeyword))
+          if (!ts.isPropertySignature(field) || !ts.isIdentifier(field.name) || !(field.type ?? null) ||
+              (field.questionToken ?? null) || !(field.modifiers ?? []).some(mod => mod.kind === ts.SyntaxKind.ReadonlyKeyword))
             return ctx.fail(field, "CU307", "record must have readonly, statically typed fields");
           return "    pub " + identifier(field.name.text) + ": " + ctx.rustType(field.type ?? null, field) + ",";
         });
@@ -183,7 +192,7 @@ export function compile(request: CompileRequest): CompileResult {
       if (ts.isVariableStatement(statement)) {
         emitGlobals(statement);
       }
-      if (ts.isFunctionDeclaration(statement) && statement.body) {
+      if (ts.isFunctionDeclaration(statement) && (statement.body ?? null)) {
         body.push(emitter.function(statement), "");
         functions++;
       }

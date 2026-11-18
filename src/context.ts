@@ -54,14 +54,14 @@ export class Context {
   }
 
   symbol(node: ts.Node): ts.Symbol | null {
-    const symbol = this.checker.getSymbolAtLocation(node);
+    const symbol = this.checker.getSymbolAtLocation(node) ?? null;
     return symbol && symbol.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(symbol) : symbol ?? null;
   }
 
   register(node: ts.Identifier, entry: Entry): void {
     const symbol = this.symbol(node);
     if (!symbol) this.fail(node, "CU102", "unresolved declaration");
-    const previous = this.names.get(entry.name);
+    const previous = this.names.get(entry.name) ?? null;
     if (previous && !entry.name.startsWith("__bake_c_")) this.fail(node, "CU103", "symbol collision: " + entry.name);
     if (previous && previous.kind !== entry.kind) this.fail(node, "CU103", "intrinsic collision");
     this.entries.set(symbol, previous ?? entry);
@@ -80,13 +80,13 @@ export class Context {
   }
 
   rustType(node: ts.TypeNode | null, origin: ts.Node): string {
-    if (node?.kind === ts.SyntaxKind.NeverKeyword) return "!";
+    if (node && node.kind === ts.SyntaxKind.NeverKeyword) return "!";
     return this.typeOf(node ? this.checker.getTypeFromTypeNode(node) : this.checker.getTypeAtLocation(origin), origin);
   }
 
   private unionType(type: ts.UnionType, origin: ts.Node): string {
     const variants = [...new Set(type.types.map(item => this.typeOf(item, origin)))];
-    const first = variants[0];
+    const first = variants[0] ?? null;
     if (variants.length === 1 && first != null) return first;
     if (variants.length === 2 && variants.every(item => numeric.has(item))) return "Numeric";
     return this.fail(origin, "CU104", "unsupported union " + variants.join(" | "));
@@ -101,9 +101,9 @@ export class Context {
     if (flags & ts.TypeFlags.Never) return "!";
     if (flags & ts.TypeFlags.Void) return "()";
     if (flags & ts.TypeFlags.StringLike) return "&'static str";
-    const symbol = type.getSymbol();
+    const symbol = type.getSymbol() ?? null;
     const entry = symbol ? this.entries.get(symbol) ?? null : null;
-    if (entry?.kind === "record") return entry.name.startsWith("__bake_c_") ? entry.name : "crate::" + entry.name;
+    if (entry && entry.kind === "record") return entry.name.startsWith("__bake_c_") ? entry.name : "crate::" + entry.name;
     this.fail(origin, "CU105", "unsupported type " + this.checker.typeToString(type));
   }
 
@@ -112,14 +112,14 @@ export class Context {
   }
 
   returnType(node: ts.FunctionDeclaration): string {
-    if (node.type) return this.rustType(node.type ?? null, node);
-    const sig = this.checker.getSignatureFromDeclaration(node);
+    if (node.type ?? null) return this.rustType(node.type ?? null, node);
+    const sig = this.checker.getSignatureFromDeclaration(node) ?? null;
     if (!sig) this.fail(node, "CU106", "missing function signature");
     return this.typeOf(sig.getReturnType(), node);
   }
 
   parameterType(node: ts.ParameterDeclaration): string {
-    if (node.type) return this.rustType(node.type ?? null, node);
+    if (node.type ?? null) return this.rustType(node.type ?? null, node);
     return this.rustType(null, node.name);
   }
 }
