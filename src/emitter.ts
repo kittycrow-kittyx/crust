@@ -24,10 +24,8 @@ export class Emitter {
 
   convert(node: ts.Expression, actual: string, expected: string | undefined, value: string): string {
     if (!expected || actual === expected || actual === "!") return value;
-    if (expected === "Numeric") {
-      if (actual === "f64") return "Numeric::Number(" + value + ")";
-      if (actual === "i128") return "Numeric::BigInt(" + value + ")";
-    }
+    if (expected === "Numeric" && actual === "f64") return "Numeric::Number(" + value + ")";
+    if (expected === "Numeric" && actual === "i128") return "Numeric::BigInt(" + value + ")";
     return this.ctx.fail(node, "CU201", "cannot convert " + actual + " to " + expected);
   }
 
@@ -49,36 +47,35 @@ export class Emitter {
       return this.ctx.fail(node, "CU204", "unresolved native function " + node.expression.text);
     const decl = entry.declaration;
     if (!ts.isFunctionDeclaration(decl)) return this.ctx.fail(node, "CU204", "invalid function declaration");
-    const args: string[] = [];
-    for (let index = 0; index < decl.parameters.length; index++) {
-      const parameter = decl.parameters[index]!;
-      const argument = node.arguments[index];
-      if (parameter.dotDotDotToken) return this.ctx.fail(parameter, "CU205", "rest parameter");
-      const type = this.ctx.parameterType(parameter);
-      if (argument) {
-        const result = this.expression(argument, type);
-        args.push(parameter.questionToken ? "Some(" + result + ")" : result);
-      } else if (parameter.questionToken) args.push("None");
-      else if (parameter.initializer) {
-        // Only literal defaults are independent of the caller's evaluation context.
-        const value = parameter.initializer;
-        if (!(ts.isNumericLiteral(value) || ts.isBigIntLiteral(value) || ts.isStringLiteral(value) ||
-          value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword))
-          return this.ctx.fail(value, "CU206", "non-literal default argument");
-        args.push(this.expression(value, type));
-      } else return this.ctx.fail(node, "CU207", "missing argument");
-    }
+    const args = decl.parameters.map((parameter, index) => this.argument(node, parameter, node.arguments[index]));
     if (node.arguments.length > decl.parameters.length) return this.ctx.fail(node, "CU207", "extra argument");
     if (entry.kind === "function") return "crate::" + entry.name + "(ctx" + (args.length ? ", " + args.join(", ") : "") + ")";
     const name = entry.name;
     if (builtin[name]) return "numbers::" + builtin[name] + "(" + args.join(", ") + ")";
     if (name === "__bake_c_f64_is_nan") return "(" + args[0] + ").is_nan()";
     if (name === "__bake_c_f64_is_integer") {
-      const temp = this.ctx.temp();
+      const temp = this.ctx.freshLocal();
       return "{ let " + temp + " = " + args[0] + "; " + temp + ".is_finite() && numbers::trunc(" + temp + ") == " + temp + " }";
     }
     if (name === "__bake_c_f32_round") return "((" + args[0] + ") as f32 as f64)";
     return "ctx.platform." + name + "(" + args.join(", ") + ")";
+  }
+
+  private argument(node: ts.CallExpression, parameter: ts.ParameterDeclaration, argument: ts.Expression | undefined): string {
+    if (parameter.dotDotDotToken) return this.ctx.fail(parameter, "CU205", "rest parameter");
+    const type = this.ctx.parameterType(parameter);
+    if (argument) {
+      const result = this.expression(argument, type);
+      return parameter.questionToken ? "Some(" + result + ")" : result;
+    }
+    if (parameter.questionToken) return "None";
+    const value = parameter.initializer;
+    if (!value) return this.ctx.fail(node, "CU207", "missing argument");
+    // Only literal defaults are independent of the caller's evaluation context.
+    if (!(ts.isNumericLiteral(value) || ts.isBigIntLiteral(value) || ts.isStringLiteral(value) ||
+      value.kind === ts.SyntaxKind.TrueKeyword || value.kind === ts.SyntaxKind.FalseKeyword))
+      return this.ctx.fail(value, "CU206", "non-literal default argument");
+    return this.expression(value, type);
   }
 
   private local(node: ts.Expression): string {
@@ -89,118 +86,128 @@ export class Emitter {
     return identifier(node.text);
   }
 
-  private binary(node: ts.Node, op: string, left: string, right: string, a: string, b: string): string {
-    const eq = op === "===" || op === "!==";
-    if (a !== b) {
-      if (eq && numeric.has(a) && numeric.has(b)) return "{ let _ = " + left + "; let _ = " + right + "; " + (op === "!==" ? "true" : "false") + " }";
-      if (numeric.has(a) && numeric.has(b) && ["<", ">", "<=", ">="].includes(op)) {
-        const relation = a === "f64" ? op : ({ "<": ">", ">": "<", "<=": ">=", ">=": "<=" } as Record<string, string>)[op]!;
-        const method = relation === "<" ? "is_lt" : relation === ">" ? "is_gt" : relation === "<=" ? "is_le" : "is_ge";
-        // Both operands retain their original evaluation order.
-        const l = this.ctx.temp(), r = this.ctx.temp();
-        return "{ let " + l + " = " + left + "; let " + r + " = " + right + "; numbers::compare_number_bigint(" +
-          (a === "f64" ? l + ", " + r : r + ", " + l) + ").is_some_and(|order| order." + method + "()) }";
-      }
+  private mixedBinary(node: ts.Node, op: string, left: string, right: string, a: string, b: string): string {
+    if (!numeric.has(a) || !numeric.has(b)) return this.ctx.fail(node, "CU209", "mixed operands " + a + " " + op + " " + b);
+    if (op === "===" || op === "!==") return "{ let _ = " + left + "; let _ = " + right + "; " + (op === "!==" ? "true" : "false") + " }";
+    const reverse: Readonly<Record<string, string>> = { "<": ">", ">": "<", "<=": ">=", ">=": "<=" };
+    const relation = a === "f64" ? op : reverse[op];
+    if (!relation || !["<", ">", "<=", ">="].includes(relation))
       return this.ctx.fail(node, "CU209", "mixed operands " + a + " " + op + " " + b);
-    }
+    const method = relation === "<" ? "is_lt" : relation === ">" ? "is_gt" : relation === "<=" ? "is_le" : "is_ge";
+    // Both operands retain their original evaluation order.
+    const l = this.ctx.freshLocal(), r = this.ctx.freshLocal();
+    return "{ let " + l + " = " + left + "; let " + r + " = " + right + "; numbers::compare_number_bigint(" +
+      (a === "f64" ? l + ", " + r : r + ", " + l) + ").is_some_and(|order| order." + method + "()) }";
+  }
+
+  private binary(node: ts.Node, op: string, left: string, right: string, a: string, b: string): string {
+    if (a !== b) return this.mixedBinary(node, op, left, right, a, b);
+    const eq = op === "===" || op === "!==";
     if (eq && (numeric.has(a) || a === "bool" || a === "&'static str"))
       return "(" + left + (op === "===" ? " == " : " != ") + right + ")";
     if (op === "==" || op === "!=") return this.ctx.fail(node, "CU210", "coercive equality unsupported");
-    if (a === "f64") {
-      const helper = numberOps[op];
-      if (helper) return "numbers::" + helper + "(" + left + ", " + right + ")";
-      if (["+", "-", "*", "/", "%", "<", ">", "<=", ">="].includes(op))
-        return "(" + left + " " + op + " " + right + ")";
-    }
-    if (a === "i128") {
-      const helper = bigintOps[op];
-      if (helper) return "(" + left + ")." + helper + "(" + right + ").expect(\"BigInt arithmetic\")";
-      if (op === "<<" || op === ">>") return "numbers::big_" + (op === "<<" ? "shl" : "shr") + "(" + left + ", " + right + ")";
-      if (["&", "|", "^", "<", ">", "<=", ">="].includes(op)) return "(" + left + " " + op + " " + right + ")";
-    }
+    const numberHelper = numberOps[op], bigintHelper = bigintOps[op];
+    if (a === "f64" && numberHelper) return "numbers::" + numberHelper + "(" + left + ", " + right + ")";
+    if (a === "f64" && ["+", "-", "*", "/", "%", "<", ">", "<=", ">="].includes(op)) return "(" + left + " " + op + " " + right + ")";
+    if (a === "i128" && bigintHelper) return "(" + left + ")." + bigintHelper + "(" + right + ").expect(\"BigInt arithmetic\")";
+    if (a === "i128" && (op === "<<" || op === ">>")) return "numbers::big_" + (op === "<<" ? "shl" : "shr") + "(" + left + ", " + right + ")";
+    if (a === "i128" && ["&", "|", "^", "<", ">", "<=", ">="].includes(op)) return "(" + left + " " + op + " " + right + ")";
     return this.ctx.fail(node, "CU211", "unsupported operator " + op + " for " + a);
   }
 
-  expression(node: ts.Expression, expected?: string): string {
-    const f = (value: ts.Expression, type?: string): string => this.expression(value, type);
-    if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node)) return "(" + f(node.expression, expected) + ")";
-    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node))
-      return f(node.expression, expected ?? this.ctx.expressionType(node));
-    if (ts.isObjectLiteralExpression(node)) {
-      const type = expected ?? this.ctx.expressionType(node);
-      if (!type.startsWith("crate::") && !type.startsWith("__bake_c_"))
-        return this.ctx.fail(node, "CU212", "object literal requires a named record");
-      const fields = node.properties.map(property => {
-        if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name))
-          return identifier(property.name.text) + ": " + f(property.initializer);
-        if (ts.isShorthandPropertyAssignment(property)) {
-          const symbol = this.ctx.checker.getShorthandAssignmentValueSymbol(property);
-          const entry = symbol ? this.ctx.entries.get(symbol) : undefined;
-          const value = entry?.kind === "global" ? "ctx.globals." + entry.name + ".expect(\"global initialisation\")" : identifier(property.name.text);
-          return identifier(property.name.text) + ": " + value;
-        }
-        return this.ctx.fail(property, "CU213", "unsupported object field");
-      });
-      return type + " { " + fields.join(", ") + " }";
+  private field(property: ts.ObjectLiteralElementLike): string {
+    if (ts.isPropertyAssignment(property) && ts.isIdentifier(property.name))
+      return identifier(property.name.text) + ": " + this.expression(property.initializer);
+    if (!ts.isShorthandPropertyAssignment(property)) return this.ctx.fail(property, "CU213", "unsupported object field");
+    const symbol = this.ctx.checker.getShorthandAssignmentValueSymbol(property);
+    const entry = symbol ? this.ctx.entries.get(symbol) : undefined;
+    const value = entry?.kind === "global" ? "ctx.globals." + entry.name + ".expect(\"global initialisation\")" : identifier(property.name.text);
+    return identifier(property.name.text) + ": " + value;
+  }
+
+  private object(node: ts.ObjectLiteralExpression, expected?: string): string {
+    const type = expected ?? this.ctx.expressionType(node);
+    if (!type.startsWith("crate::") && !type.startsWith("__bake_c_"))
+      return this.ctx.fail(node, "CU212", "object literal requires a named record");
+    return type + " { " + node.properties.map(property => this.field(property)).join(", ") + " }";
+  }
+
+  private numberLiteral(node: ts.NumericLiteral): string {
+    const value = Number(node.text.replaceAll("_", ""));
+    if (!Number.isFinite(value)) return this.ctx.fail(node, "CU214", "non-finite literal");
+    return value.toString() + (/[.e]/i.test(value.toString()) ? "f64" : ".0f64");
+  }
+
+  private bigintLiteral(node: ts.BigIntLiteral): string {
+    const value = BigInt(node.text.slice(0, -1).replaceAll("_", ""));
+    if (value > (1n << 127n) - 1n) return this.ctx.fail(node, "CU215", "BigInt literal exceeds i128");
+    return value.toString() + "i128";
+  }
+
+  private valueName(node: ts.Identifier): string {
+    const entry = this.ctx.entry(node);
+    if (entry?.kind === "global") return "ctx.globals." + entry.name + ".expect(\"global initialisation\")";
+    if (!entry && this.ctx.symbol(node)?.declarations?.some(d => ts.isParameter(d) || ts.isVariableDeclaration(d) || ts.isBindingElement(d))) return identifier(node.text);
+    return this.ctx.fail(node, "CU217", "unresolved value " + node.text);
+  }
+
+  private binaryExpression(node: ts.BinaryExpression): string {
+    const op = node.operatorToken.getText();
+    const a = this.ctx.expressionType(node.left), b = this.ctx.expressionType(node.right);
+    const logical = op === "&&" || op === "||";
+    if (logical && (a !== "bool" || b !== "bool")) return this.ctx.fail(node, "CU218", "logical operands must be boolean");
+    if (logical) return "(" + this.expression(node.left) + " " + op + " " + this.expression(node.right) + ")";
+    if (op === ",") return "{ let _ = " + this.expression(node.left) + "; " + this.expression(node.right) + " }";
+    if (op === "=" || ["+=","-=","*=","/=","%=","&=","|=","^=","<<=",">>=",">>>="].includes(op)) {
+      const name = this.local(node.left);
+      const value = op === "=" ? this.expression(node.right, a) : this.binary(node, op.slice(0,-1), name, this.expression(node.right), a, b);
+      return "{ " + name + " = " + value + "; " + name + " }";
     }
-    let actual = this.ctx.expressionType(node);
-    let result: string;
-    if (ts.isNumericLiteral(node)) {
-      const value = Number(node.text.replaceAll("_", ""));
-      if (!Number.isFinite(value)) return this.ctx.fail(node, "CU214", "non-finite literal");
-      result = value.toString() + (/[.e]/i.test(value.toString()) ? "f64" : ".0f64");
-    } else if (ts.isBigIntLiteral(node)) {
-      const value = BigInt(node.text.slice(0, -1).replaceAll("_", ""));
-      if (value > (1n << 127n) - 1n) return this.ctx.fail(node, "CU215", "BigInt literal exceeds i128");
-      result = value.toString() + "i128";
-    } else if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) {
-      result = node.kind === ts.SyntaxKind.TrueKeyword ? "true" : "false";
-    } else if (ts.isStringLiteral(node)) {
-      if (!/^[\x20-\x7e]*$/.test(node.text)) return this.ctx.fail(node, "CU216", "non-ASCII string literal");
-      result = JSON.stringify(node.text);
-    } else if (ts.isIdentifier(node)) {
-      const entry = this.ctx.entry(node);
-      if (entry?.kind === "global") result = "ctx.globals." + entry.name + ".expect(\"global initialisation\")";
-      else if (!entry && this.ctx.symbol(node)?.declarations?.some(d => ts.isParameter(d) || ts.isVariableDeclaration(d) || ts.isBindingElement(d))) result = identifier(node.text);
-      else return this.ctx.fail(node, "CU217", "unresolved value " + node.text);
-    } else if (ts.isCallExpression(node)) {
-      result = this.call(node);
-    } else if (ts.isPropertyAccessExpression(node)) {
-      result = "(" + f(node.expression) + ")." + identifier(node.name.text);
-    } else if (ts.isConditionalExpression(node)) {
+    return this.binary(node, op, this.expression(node.left), this.expression(node.right), a, b);
+  }
+
+  private unary(node: ts.PrefixUnaryExpression | ts.PostfixUnaryExpression): string {
+    const op = ts.tokenToString(node.operator);
+    const operand = node.operand;
+    const type = this.ctx.expressionType(operand);
+    if (op === "!" && ts.isPrefixUnaryExpression(node)) return "(!" + this.condition(operand) + ")";
+    if (op === "~") return type === "i128" ? "(!" + this.expression(operand) + ")" : "numbers::not(" + this.expression(operand) + ")";
+    if (op === "-") return type === "i128" ? "(" + this.expression(operand) + ").checked_neg().expect(\"BigInt negation\")" : "(-" + this.expression(operand) + ")";
+    if (op === "+" && type === "f64") return this.expression(operand);
+    if (op !== "++" && op !== "--") return this.ctx.fail(node, "CU219", "unsupported unary operator " + op);
+    const name = this.local(operand);
+    const old = this.ctx.freshLocal();
+    return "{ let " + old + " = " + name + "; " + name + " = " +
+      this.binary(node, op === "++" ? "+" : "-", old, type === "i128" ? "1i128" : "1.0f64", type, type) +
+      "; " + (ts.isPostfixUnaryExpression(node) ? old : name) + " }";
+  }
+
+  private rawExpression(node: ts.Expression): string {
+    if (ts.isNumericLiteral(node)) return this.numberLiteral(node);
+    if (ts.isBigIntLiteral(node)) return this.bigintLiteral(node);
+    if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return node.kind === ts.SyntaxKind.TrueKeyword ? "true" : "false";
+    if (ts.isStringLiteral(node) && !/^[\x20-\x7e]*$/.test(node.text)) return this.ctx.fail(node, "CU216", "non-ASCII string literal");
+    if (ts.isStringLiteral(node)) return JSON.stringify(node.text);
+    if (ts.isIdentifier(node)) return this.valueName(node);
+    if (ts.isCallExpression(node)) return this.call(node);
+    if (ts.isPropertyAccessExpression(node)) return "(" + this.expression(node.expression) + ")." + identifier(node.name.text);
+    if (ts.isBinaryExpression(node)) return this.binaryExpression(node);
+    if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) return this.unary(node);
+    return this.ctx.fail(node, "CU220", "unsupported expression " + ts.SyntaxKind[node.kind]);
+  }
+
+  expression(node: ts.Expression, expected?: string): string {
+    if (ts.isParenthesizedExpression(node) || ts.isNonNullExpression(node)) return "(" + this.expression(node.expression, expected) + ")";
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node))
+      return this.expression(node.expression, expected ?? this.ctx.expressionType(node));
+    if (ts.isObjectLiteralExpression(node)) return this.object(node, expected);
+    const actual = this.ctx.expressionType(node);
+    if (ts.isConditionalExpression(node)) {
       const type = expected ?? actual;
-      result = "(if " + this.condition(node.condition) + " { " + f(node.whenTrue, type) + " } else { " + f(node.whenFalse, type) + " })";
-      actual = type;
-    } else if (ts.isBinaryExpression(node)) {
-      const op = node.operatorToken.getText();
-      const a = this.ctx.expressionType(node.left), b = this.ctx.expressionType(node.right);
-      if (op === "&&" || op === "||") {
-        if (a === "bool" && b === "bool") result = "(" + f(node.left) + " " + op + " " + f(node.right) + ")";
-        else return this.ctx.fail(node, "CU218", "logical operands must be boolean");
-      } else if (op === ",") {
-        result = "{ let _ = " + f(node.left) + "; " + f(node.right) + " }";
-      } else if (op === "=" || ["+=","-=","*=","/=","%=","&=","|=","^=","<<=",">>=",">>>="].includes(op)) {
-        const name = this.local(node.left);
-        const value = op === "=" ? f(node.right, a) : this.binary(node, op.slice(0,-1), name, f(node.right), a, b);
-        result = "{ " + name + " = " + value + "; " + name + " }";
-      } else result = this.binary(node, op, f(node.left), f(node.right), a, b);
-    } else if (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) {
-      const op = ts.tokenToString(node.operator);
-      const operand = node.operand;
-      const type = this.ctx.expressionType(operand);
-      if (op === "!" && ts.isPrefixUnaryExpression(node)) result = "(!" + this.condition(operand) + ")";
-      else if (op === "~") result = type === "i128" ? "(!" + f(operand) + ")" : "numbers::not(" + f(operand) + ")";
-      else if (op === "-") result = type === "i128" ? "(" + f(operand) + ").checked_neg().expect(\"BigInt negation\")" : "(-" + f(operand) + ")";
-      else if (op === "+" && type === "f64") result = f(operand);
-      else if (op === "++" || op === "--") {
-        const name = this.local(operand);
-        const old = this.ctx.temp();
-        result = "{ let " + old + " = " + name + "; " + name + " = " +
-          this.binary(node, op === "++" ? "+" : "-", old, type === "i128" ? "1i128" : "1.0f64", type, type) +
-          "; " + (ts.isPostfixUnaryExpression(node) ? old : name) + " }";
-      } else return this.ctx.fail(node, "CU219", "unsupported unary operator " + op);
-    } else return this.ctx.fail(node, "CU220", "unsupported expression " + ts.SyntaxKind[node.kind]);
-    return this.convert(node, actual, expected, result);
+      const result = "(if " + this.condition(node.condition) + " { " + this.expression(node.whenTrue, type) + " } else { " + this.expression(node.whenFalse, type) + " })";
+      return this.convert(node, type, expected, result);
+    }
+    return this.convert(node, actual, expected, this.rawExpression(node));
   }
 
   private variables(list: ts.VariableDeclarationList): string {
@@ -218,7 +225,26 @@ export class Emitter {
     try { return this.statement(node, returns); } finally { this.loops.pop(); }
   }
 
+  private countedLoop(node: ts.ForStatement | ts.DoStatement, returns: string): string {
+    const label = "'" + this.ctx.freshLocal();
+    const bodyLabel = label + "_body";
+    const init = ts.isForStatement(node) ? node.initializer : undefined;
+    const setup = init ? (ts.isVariableDeclarationList(init) ? this.variables(init) : "let _ = " + this.expression(init) + ";\n") : "";
+    const condition = ts.isForStatement(node) && node.condition ? "if !(" + this.condition(node.condition) + ") { break " + label + "; }\n" : "";
+    const after = ts.isForStatement(node) ? (node.incrementor ? "let _ = " + this.expression(node.incrementor) + ";\n" : "") : "if !(" + this.condition(node.expression) + ") { break " + label + "; }\n";
+    return "{\n" + setup + label + ": loop {\n" + condition + bodyLabel + ": {\n" +
+      this.loopBody(node.statement, returns, label, true) + "}\n" + after + "}\n}\n";
+  }
+
+  private loopExit(node: ts.BreakStatement | ts.ContinueStatement): string {
+    const loop = this.loops.at(-1);
+    if (!loop || node.label) return this.ctx.fail(node, "CU222", "unresolved control-flow exit");
+    if (ts.isBreakStatement(node)) return "break " + loop.label + ";\n";
+    return loop.continueInside ? "break " + loop.label + "_body;\n" : "continue " + loop.label + ";\n";
+  }
+
   statement(node: ts.Statement, returns: string): string {
+    // Loop labels preserve increment and condition evaluation on continue.
     const s = (stmt: ts.Statement): string => this.statement(stmt, returns);
     if (ts.isBlock(node)) return "{\n" + node.statements.map(s).join("") + "}\n";
     if (ts.isVariableStatement(node)) return this.variables(node.declarationList);
@@ -226,27 +252,11 @@ export class Emitter {
     if (ts.isIfStatement(node)) return "if " + this.condition(node.expression) + " {\n" + s(node.thenStatement) + "}\n" +
       (node.elseStatement ? "else {\n" + s(node.elseStatement) + "}\n" : "");
     if (ts.isWhileStatement(node)) {
-      const label = "'" + this.ctx.temp();
+      const label = "'" + this.ctx.freshLocal();
       return label + ": while " + this.condition(node.expression) + " {\n" + this.loopBody(node.statement, returns, label, false) + "}\n";
     }
-    if (ts.isForStatement(node) || ts.isDoStatement(node)) {
-      const label = "'" + this.ctx.temp();
-      const bodyLabel = label + "_body";
-      let setup = "", condition = "", after = "";
-      if (ts.isForStatement(node)) {
-        if (node.initializer) setup = ts.isVariableDeclarationList(node.initializer) ? this.variables(node.initializer) : "let _ = " + this.expression(node.initializer) + ";\n";
-        if (node.condition) condition = "if !(" + this.condition(node.condition) + ") { break " + label + "; }\n";
-        if (node.incrementor) after = "let _ = " + this.expression(node.incrementor) + ";\n";
-      } else after = "if !(" + this.condition(node.expression) + ") { break " + label + "; }\n";
-      return "{\n" + setup + label + ": loop {\n" + condition + bodyLabel + ": {\n" +
-        this.loopBody(node.statement, returns, label, true) + "}\n" + after + "}\n}\n";
-    }
-    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) {
-      const loop = this.loops.at(-1);
-      if (!loop || node.label) return this.ctx.fail(node, "CU222", "unresolved control-flow exit");
-      if (ts.isBreakStatement(node)) return "break " + loop.label + ";\n";
-      return loop.continueInside ? "break " + loop.label + "_body;\n" : "continue " + loop.label + ";\n";
-    }
+    if (ts.isForStatement(node) || ts.isDoStatement(node)) return this.countedLoop(node, returns);
+    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) return this.loopExit(node);
     if (ts.isExpressionStatement(node)) return "let _ = " + this.expression(node.expression) + ";\n";
     if (ts.isEmptyStatement(node)) return "";
     return this.ctx.fail(node, "CU223", "unsupported statement " + ts.SyntaxKind[node.kind]);

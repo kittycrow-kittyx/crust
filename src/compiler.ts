@@ -80,6 +80,29 @@ function publish(destination: string, outputs: ReadonlyMap<string, string>): voi
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
+function registerFunction(ctx: Context, source: ts.SourceFile, statement: ts.FunctionDeclaration, name: ts.Identifier): void {
+  const intrinsic = name.text.startsWith("__bake_c_");
+  if (intrinsic === Boolean(statement.body)) ctx.fail(statement, "CU302", "unexpected function body or ambient declaration");
+  ctx.register(name, { name: intrinsic ? name.text : ctx.module(source) + "::" + identifier(name.text),
+    kind: intrinsic ? "intrinsic" : "function", declaration: statement });
+}
+
+function registerGlobals(ctx: Context, source: ts.SourceFile, statement: ts.VariableStatement): void {
+  if (!(statement.declarationList.flags & ts.NodeFlags.Const)) ctx.fail(statement, "CU303", "mutable module global unsupported");
+  for (const decl of statement.declarationList.declarations) {
+    if (!ts.isIdentifier(decl.name) || !decl.initializer) ctx.fail(decl, "CU304", "global requires a named initialiser");
+    ctx.register(decl.name, { name: ctx.module(source) + "__" + identifier(decl.name.text), kind: "global", declaration: decl });
+  }
+}
+
+function registerStatement(ctx: Context, source: ts.SourceFile, statement: ts.Statement): void {
+  if (ts.isInterfaceDeclaration(statement)) return ctx.register(statement.name, { name: ctx.recordName(statement), kind: "record", declaration: statement });
+  if (ts.isFunctionDeclaration(statement) && statement.name) return registerFunction(ctx, source, statement, statement.name);
+  if (ts.isVariableStatement(statement)) return registerGlobals(ctx, source, statement);
+  if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEmptyStatement(statement)) return;
+  ctx.fail(statement, "CU305", "unsupported module statement " + ts.SyntaxKind[statement.kind]);
+}
+
 export function compile(request: CompileRequest): CompileResult {
   const manifestPath = path.resolve(request.manifestPath);
   const root = path.dirname(manifestPath);
@@ -119,25 +142,7 @@ export function compile(request: CompileRequest): CompileResult {
   const names = sources.map(source => ctx.module(source));
   if (new Set(names).size !== names.length) throw new Error("CU006: colliding Rust module names");
   for (const source of sources) {
-    for (const statement of source.statements) {
-      if (ts.isInterfaceDeclaration(statement)) {
-        ctx.register(statement.name, { name: ctx.recordName(statement), kind: "record", declaration: statement });
-      } else if (ts.isFunctionDeclaration(statement) && statement.name) {
-        const intrinsic = statement.name.text.startsWith("__bake_c_");
-        if (intrinsic === Boolean(statement.body)) ctx.fail(statement, "CU302", "unexpected function body or ambient declaration");
-        ctx.register(statement.name, { name: intrinsic ? statement.name.text : ctx.module(source) + "::" + identifier(statement.name.text),
-          kind: intrinsic ? "intrinsic" : "function", declaration: statement });
-      } else if (ts.isVariableStatement(statement)) {
-        if (!(statement.declarationList.flags & ts.NodeFlags.Const)) ctx.fail(statement, "CU303", "mutable module global unsupported");
-        for (const decl of statement.declarationList.declarations) {
-          if (!ts.isIdentifier(decl.name) || !decl.initializer) ctx.fail(decl, "CU304", "global requires a named initialiser");
-          ctx.register(decl.name, { name: ctx.module(source) + "__" + identifier(decl.name.text), kind: "global", declaration: decl });
-        }
-      } else if (!(ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) ||
-        ts.isTypeAliasDeclaration(statement) || ts.isEmptyStatement(statement))) {
-        ctx.fail(statement, "CU305", "unsupported module statement " + ts.SyntaxKind[statement.kind]);
-      }
-    }
+    for (const statement of source.statements) registerStatement(ctx, source, statement);
   }
   const outputs = new Map<string, string>();
   const modules: string[] = [];
@@ -171,11 +176,13 @@ export function compile(request: CompileRequest): CompileResult {
       }
       if (ts.isVariableStatement(statement)) {
         for (const decl of statement.declarationList.declarations) {
-          const entry = ctx.entry(decl.name)!;
+          const entry = ctx.entry(decl.name);
+          const initializer = decl.initializer;
+          if (!entry || !initializer) ctx.fail(decl, "CU304", "unresolved global initialiser");
           const type = ctx.rustType(decl.type, decl.name);
           globalFields.push("    pub(crate) " + entry.name + ": Option<" + type + ">,");
           globalDefaults.push("            " + entry.name + ": None,");
-          initialisers.push("        ctx.globals." + entry.name + " = Some(" + emitter.expression(decl.initializer!, type) + ");");
+          initialisers.push("        ctx.globals." + entry.name + " = Some(" + emitter.expression(initializer, type) + ");");
         }
       }
       if (ts.isFunctionDeclaration(statement) && statement.body) {

@@ -36,7 +36,7 @@ export class Context {
     this.checker = program.getTypeChecker();
   }
 
-  temp(): string { return "__crust_v" + this.serial++; }
+  freshLocal(): string { return "__crust_v" + this.serial++; }
 
   fail(node: ts.Node, code: string, message: string): never {
     const source = node.getSourceFile();
@@ -84,13 +84,16 @@ export class Context {
     return this.typeOf(node ? this.checker.getTypeFromTypeNode(node) : this.checker.getTypeAtLocation(origin), origin);
   }
 
+  private unionType(type: ts.UnionType, origin: ts.Node): string {
+    const variants = [...new Set(type.types.map(item => this.typeOf(item, origin)))];
+    const first = variants[0];
+    if (variants.length === 1 && first !== undefined) return first;
+    if (variants.length === 2 && variants.every(item => numeric.has(item))) return "Numeric";
+    return this.fail(origin, "CU104", "unsupported union " + variants.join(" | "));
+  }
+
   typeOf(type: ts.Type, origin: ts.Node): string {
-    if (type.isUnion()) {
-      const variants = [...new Set(type.types.map(item => this.typeOf(item, origin)))];
-      if (variants.length === 1) return variants[0]!;
-      if (variants.length === 2 && variants.every(item => numeric.has(item))) return "Numeric";
-      this.fail(origin, "CU104", "unsupported union " + variants.join(" | "));
-    }
+    if (type.isUnion()) return this.unionType(type, origin);
     const flags = type.flags;
     if (flags & ts.TypeFlags.NumberLike) return "f64";
     if (flags & ts.TypeFlags.BigIntLike) return "i128";
