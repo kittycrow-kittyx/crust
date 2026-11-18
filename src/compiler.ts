@@ -81,7 +81,9 @@ function publish(destination: string, outputs: ReadonlyMap<string, string>): voi
   } finally { fs.rmSync(stage, { recursive: true, force: true }); }
 }
 
-function registerFunction(ctx: Context, source: ts.SourceFile, statement: ts.FunctionDeclaration, name: ts.Identifier): void {
+function registerFunction(ctx: Context, source: ts.SourceFile, statement: ts.FunctionDeclaration): void {
+  const name = statement.name ?? null;
+  if (!name) ctx.fail(statement, "CU305", "anonymous function declaration");
   const intrinsic = name.text.startsWith("__bake_c_");
   if (intrinsic === Boolean(statement.body ?? null)) ctx.fail(statement, "CU302", "unexpected function body or ambient declaration");
   ctx.register(name, { name: intrinsic ? name.text : ctx.module(source) + "::" + identifier(name.text),
@@ -98,11 +100,7 @@ function registerGlobals(ctx: Context, source: ts.SourceFile, statement: ts.Vari
 
 function registerStatement(ctx: Context, source: ts.SourceFile, statement: ts.Statement): void {
   if (ts.isInterfaceDeclaration(statement)) return ctx.register(statement.name, { name: ctx.recordName(statement), kind: "record", declaration: statement });
-  if (ts.isFunctionDeclaration(statement)) {
-    const name = statement.name ?? null;
-    if (!name) ctx.fail(statement, "CU305", "anonymous function declaration");
-    return registerFunction(ctx, source, statement, name);
-  }
+  if (ts.isFunctionDeclaration(statement)) return registerFunction(ctx, source, statement);
   if (ts.isVariableStatement(statement)) return registerGlobals(ctx, source, statement);
   if (ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement) || ts.isTypeAliasDeclaration(statement) || ts.isEmptyStatement(statement)) return;
   ctx.fail(statement, "CU305", "unsupported module statement " + ts.SyntaxKind[statement.kind]);
