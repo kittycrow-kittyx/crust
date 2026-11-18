@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import { readManifest } from "./manifest.js";
 import { Context, CompilerError, identifier } from "./context.js";
 import { Emitter, isBuiltin } from "./emitter.js";
 import { numericSource } from "./numbers.js";
@@ -14,11 +15,6 @@ export interface CompileResult {
   readonly functions: number;
   readonly globals: number;
   readonly outputPath: string;
-}
-interface Manifest {
-  readonly schema?: number;
-  readonly target?: { compiler?: string; backend?: string; format?: string; freestanding?: boolean; intrinsicAbi?: number };
-  readonly sourceFiles?: readonly string[];
 }
 const options: ts.CompilerOptions = {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
@@ -109,14 +105,8 @@ export function compile(request: CompileRequest): CompileResult {
   const destination = path.resolve(request.outputDir);
   if (destination === root || root.startsWith(destination + path.sep) || destination.startsWith(root + path.sep))
     throw new Error("CU401: output must be separate from Bake input");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Manifest;
-  if (manifest.schema !== 1 || manifest.target?.backend !== "rust" ||
-      manifest.target.compiler !== "Crust" || manifest.target.format !== "lowered-typescript" ||
-      manifest.target.freestanding !== true || manifest.target.intrinsicAbi !== 1)
-    throw new Error("CU001: expected Bake Rust manifest schema 1 and intrinsic ABI 1");
-  if (!Array.isArray(manifest.sourceFiles) || !manifest.sourceFiles.length)
-    throw new Error("CU002: empty source manifest");
-  const paths = manifest.sourceFiles.map(relative => {
+  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+  const paths = sourcesListed.map(relative => {
     if (typeof relative !== "string" || path.isAbsolute(relative)) throw new Error("CU003: invalid source path");
     const file = path.resolve(root, relative);
     if (!file.startsWith(root + path.sep) || !file.endsWith(".ts") || !fs.existsSync(file) ||
@@ -152,7 +142,7 @@ export function compile(request: CompileRequest): CompileResult {
       const entry = ctx.entry(decl.name);
       const initializer = decl.initializer;
       if (!entry || !initializer) ctx.fail(decl, "CU304", "unresolved global initialiser");
-      const type = ctx.rustType(decl.type, decl.name);
+      const type = ctx.rustType(decl.type ?? null, decl.name);
       globalFields.push("    pub(crate) " + entry.name + ": Option<" + type + ">,");
       globalDefaults.push("            " + entry.name + ": None,");
       initialisers.push("        ctx.globals." + entry.name + " = Some(" + emitter.expression(initializer, type) + ");");
@@ -181,7 +171,7 @@ export function compile(request: CompileRequest): CompileResult {
           if (!ts.isPropertySignature(field) || !ts.isIdentifier(field.name) || !field.type ||
               field.questionToken || !field.modifiers?.some(mod => mod.kind === ts.SyntaxKind.ReadonlyKeyword))
             return ctx.fail(field, "CU307", "record must have readonly, statically typed fields");
-          return "    pub " + identifier(field.name.text) + ": " + ctx.rustType(field.type, field) + ",";
+          return "    pub " + identifier(field.name.text) + ": " + ctx.rustType(field.type ?? null, field) + ",";
         });
         body.push("#[derive(Clone, Copy)]", "pub struct " + identifier(statement.name.text) + " {", ...fields, "}", "");
       }

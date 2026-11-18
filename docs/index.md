@@ -6,3 +6,4 @@
 - [cli](modules/cli.md)
 - [numbers](modules/numbers.md)
 - [thistle-project](modules/thistle-project.md)
+- [Manifest reader](modules/manifest.md)

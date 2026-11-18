@@ -2,10 +2,10 @@
 import { compile } from "./compiler.js";
 
 const args = process.argv.slice(2);
-function option(name: string): string | undefined {
+function option(name: string): string | null {
   const index = args.indexOf(name);
-  if (index >= 0) return args[index + 1];
-  return args.find(arg => arg.startsWith(name + "="))?.slice(name.length + 1);
+  if (index >= 0) return args[index + 1] ?? null;
+  return args.find(arg => arg.startsWith(name + "="))?.slice(name.length + 1) ?? null;
 }
 const usage = "Usage: crust --manifest build/bake-rust/bake-manifest.json --out-dir build/rei-rust";
 function main(): void {

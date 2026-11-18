@@ -22,7 +22,7 @@ export class Emitter {
   private readonly loops: { label: string; continueInside: boolean }[] = [];
   constructor(readonly ctx: Context) {}
 
-  convert(node: ts.Expression, actual: string, expected: string | undefined, value: string): string {
+  convert(node: ts.Expression, actual: string, expected: string | null, value: string): string {
     if (!expected || actual === expected || actual === "!") return value;
     if (expected === "Numeric" && actual === "f64") return "Numeric::Number(" + value + ")";
     if (expected === "Numeric" && actual === "i128") return "Numeric::BigInt(" + value + ")";
@@ -47,7 +47,7 @@ export class Emitter {
       return this.ctx.fail(node, "CU204", "unresolved native function " + node.expression.text);
     const decl = entry.declaration;
     if (!ts.isFunctionDeclaration(decl)) return this.ctx.fail(node, "CU204", "invalid function declaration");
-    const args = decl.parameters.map((parameter, index) => this.argument(node, parameter, node.arguments[index]));
+    const args = decl.parameters.map((parameter, index) => this.argument(node, parameter, node.arguments[index] ?? null));
     if (node.arguments.length > decl.parameters.length) return this.ctx.fail(node, "CU207", "extra argument");
     if (entry.kind === "function") return "crate::" + entry.name + "(ctx" + (args.length ? ", " + args.join(", ") : "") + ")";
     const name = entry.name;
@@ -61,7 +61,7 @@ export class Emitter {
     return "ctx.platform." + name + "(" + args.join(", ") + ")";
   }
 
-  private argument(node: ts.CallExpression, parameter: ts.ParameterDeclaration, argument: ts.Expression | undefined): string {
+  private argument(node: ts.CallExpression, parameter: ts.ParameterDeclaration, argument: ts.Expression | null): string {
     if (parameter.dotDotDotToken) return this.ctx.fail(parameter, "CU205", "rest parameter");
     const type = this.ctx.parameterType(parameter);
     if (argument) {
@@ -120,7 +120,7 @@ export class Emitter {
       return identifier(property.name.text) + ": " + this.expression(property.initializer);
     if (!ts.isShorthandPropertyAssignment(property)) return this.ctx.fail(property, "CU213", "unsupported object field");
     const symbol = this.ctx.checker.getShorthandAssignmentValueSymbol(property);
-    const entry = symbol ? this.ctx.entries.get(symbol) : undefined;
+    const entry = symbol ? this.ctx.entries.get(symbol) ?? null : null;
     const value = entry?.kind === "global" ? "ctx.globals." + entry.name + ".expect(\"global initialisation\")" : identifier(property.name.text);
     return identifier(property.name.text) + ": " + value;
   }
@@ -205,9 +205,9 @@ export class Emitter {
     if (ts.isConditionalExpression(node)) {
       const type = expected ?? actual;
       const result = "(if " + this.condition(node.condition) + " { " + this.expression(node.whenTrue, type) + " } else { " + this.expression(node.whenFalse, type) + " })";
-      return this.convert(node, type, expected, result);
+      return this.convert(node, type, expected ?? null, result);
     }
-    return this.convert(node, actual, expected, this.rawExpression(node));
+    return this.convert(node, actual, expected ?? null, this.rawExpression(node));
   }
 
   private variables(list: ts.VariableDeclarationList): string {
@@ -215,7 +215,7 @@ export class Emitter {
     return list.declarations.map(decl => {
       if (!ts.isIdentifier(decl.name) || (!decl.type && !decl.initializer))
         return this.ctx.fail(decl, "CU221", "local requires a named typed binding");
-      const type = this.ctx.rustType(decl.type, decl.name);
+      const type = this.ctx.rustType(decl.type ?? null, decl.name);
       return "let " + (mutable ? "mut " : "") + identifier(decl.name.text) + ": " + type + (decl.initializer ? " = " + this.expression(decl.initializer, type) : "") + ";\n";
     }).join("");
   }
@@ -228,7 +228,7 @@ export class Emitter {
   private countedLoop(node: ts.ForStatement | ts.DoStatement, returns: string): string {
     const label = "'" + this.ctx.freshLocal();
     const bodyLabel = label + "_body";
-    const init = ts.isForStatement(node) ? node.initializer : undefined;
+    const init = ts.isForStatement(node) ? node.initializer ?? null : null;
     const setup = init ? (ts.isVariableDeclarationList(init) ? this.variables(init) : "let _ = " + this.expression(init) + ";\n") : "";
     const condition = ts.isForStatement(node) && node.condition ? "if !(" + this.condition(node.condition) + ") { break " + label + "; }\n" : "";
     const after = ts.isForStatement(node) ? (node.incrementor ? "let _ = " + this.expression(node.incrementor) + ";\n" : "") : "if !(" + this.condition(node.expression) + ") { break " + label + "; }\n";
