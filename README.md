@@ -1,49 +1,51 @@
 # Crust
 
-Crust makes Rust Using Statically Typed TypeScript.
+**CRUST**: Crust makes Rust Using Statically Typed TypeScript.
 
-Crust translates Bake's `--target=rust` output into a freestanding Rust library.
-Thistle remains the canonical kernel source.
+Crust translates TypeScript emitted by Bake's `rust` target into
+freestanding Rust libraries.
 
-## Build
+## Build and test
 
 ```sh
 npm install
 npm run build
+npm run check
 npm test
 ```
 
-With sibling checkouts of Bake and Thistle:
+## Compile
+
+Prepare the input using Bake's `--target=rust` option and pass the
+generated manifest to Crust:
 
 ```sh
-node dist/src/thistle-project.js ../thistle
-(cd ../bake && bun src/cli.ts --project ../thistle/tsconfig.crust.json --out-dir build/bake-rust --target=rust)
-node dist/src/cli.js --manifest ../thistle/build/bake-rust/bake-manifest.json --out-dir build/rei
-cargo check --manifest-path build/rei/Cargo.toml
+node dist/src/cli.js --manifest /path/to/bake-output/bake-manifest.json --out-dir build/native
+cargo check --manifest-path build/native/Cargo.toml
 ```
 
-## Contract
+## Compiler contract
 
-Crust consumes Bake manifest schema 1 and native intrinsic ABI 1. Generated
-modules contain native Rust functions and use `#![no_std]` and
-`#![forbid(unsafe_code)]`. The prohibition applies to the entire generated
-crate and cannot be relaxed in a submodule. Any necessary unsafe platform
-implementation must live outside that crate. No JavaScript runtime is linked. The generated crate exposes a platform trait for memory,
-atomics, traps and other platform capabilities. A platform implementation and
-boot integration are required to execute the kernel.
+Crust consumes Bake manifest schema 1 and native intrinsic ABI 1.
+Generated crates use `#![no_std]` and `#![forbid(unsafe_code)]`.
 
-The initial numeric representation preserves TypeScript's IEEE-754 numbers
-as `f64`. BigInts are bounded to checked `i128` operations, sufficient for
-many RV64 operations but not arbitrary precision. Overflow traps rather than
-silently wrapping. Explicit width conversions retain their source semantics.
-This representation is provisional; it is not the final native kernel ABI.
+The generated platform trait defines memory, atomics, traps and other
+platform operations. Its implementation belongs outside the generated
+crate.
 
-The compiler supports statically resolved functions, scalar expressions,
-immutable records, initialised module constants and structured loops.
-Unsupported input fails with a source-located diagnostic. Module constants
-are initialised once per generated context. Shared buffers remain platform
-handles, not independently copied storage.
+TypeScript numbers use `f64`. BigInt operations use bounded, checked
+`i128` arithmetic rather than arbitrary precision. Explicit width
+conversions preserve their source semantics.
 
-The linked fixture tests and canonical Thistle build in CI are distinct
-milestones. Compilation alone does not establish semantic equivalence or
-a bootable Rusty Rei.
+Unsupported input produces a source-located diagnostic. Module
+constants are initialised once per generated context. Shared buffers
+retain their allocation identity through platform handles.
+
+## Integration fixture
+
+`src/thistle-project.ts` prepares Thistle source for compiler
+integration tests. It is not required for other input projects.
+
+## Licence
+
+[MIT](LICENSE).
