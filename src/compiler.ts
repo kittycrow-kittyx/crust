@@ -147,6 +147,17 @@ export function compile(request: CompileRequest): CompileResult {
   const outputs = new Map<string, string>();
   const modules: string[] = [];
   const globalFields: string[] = [], globalDefaults: string[] = [], initialisers: string[] = [], platformMethods: string[] = [];
+  const emitGlobals = (statement: ts.VariableStatement): void => {
+    for (const decl of statement.declarationList.declarations) {
+      const entry = ctx.entry(decl.name);
+      const initializer = decl.initializer;
+      if (!entry || !initializer) ctx.fail(decl, "CU304", "unresolved global initialiser");
+      const type = ctx.rustType(decl.type, decl.name);
+      globalFields.push("    pub(crate) " + entry.name + ": Option<" + type + ">,");
+      globalDefaults.push("            " + entry.name + ": None,");
+      initialisers.push("        ctx.globals." + entry.name + " = Some(" + emitter.expression(initializer, type) + ");");
+    }
+  };
   let functions = 0;
   for (const entry of ctx.names.values()) {
     if (entry.kind !== "intrinsic" || isBuiltin(entry.name)) continue;
@@ -175,15 +186,7 @@ export function compile(request: CompileRequest): CompileResult {
         body.push("#[derive(Clone, Copy)]", "pub struct " + identifier(statement.name.text) + " {", ...fields, "}", "");
       }
       if (ts.isVariableStatement(statement)) {
-        for (const decl of statement.declarationList.declarations) {
-          const entry = ctx.entry(decl.name);
-          const initializer = decl.initializer;
-          if (!entry || !initializer) ctx.fail(decl, "CU304", "unresolved global initialiser");
-          const type = ctx.rustType(decl.type, decl.name);
-          globalFields.push("    pub(crate) " + entry.name + ": Option<" + type + ">,");
-          globalDefaults.push("            " + entry.name + ": None,");
-          initialisers.push("        ctx.globals." + entry.name + " = Some(" + emitter.expression(initializer, type) + ");");
-        }
+        emitGlobals(statement);
       }
       if (ts.isFunctionDeclaration(statement) && statement.body) {
         body.push(emitter.function(statement), "");
