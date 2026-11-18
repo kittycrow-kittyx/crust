@@ -8,15 +8,17 @@
     "crust": "./dist/src/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run guards && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "compile": "node dist/src/cli.js"
+    "compile": "node dist/src/cli.js",
+    "guards": "code-guards all --strict --path . --include-tests"
   },
   "dependencies": {
     "typescript": "~5.8.3"
   },
   "devDependencies": {
-    "@types/node": "^22.15.0"
+    "@types/node": "^22.15.0",
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#ed92b24c29a21c6cf03486c73b070005bb7bb959"
   }
 }
