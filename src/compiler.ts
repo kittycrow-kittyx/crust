@@ -99,13 +99,7 @@ function registerStatement(ctx: Context, source: ts.SourceFile, statement: ts.St
   ctx.fail(statement, "CU305", "unsupported module statement " + ts.SyntaxKind[statement.kind]);
 }
 
-export function compile(request: CompileRequest): CompileResult {
-  const manifestPath = path.resolve(request.manifestPath);
-  const root = path.dirname(manifestPath);
-  const destination = path.resolve(request.outputDir);
-  if (destination === root || root.startsWith(destination + path.sep) || destination.startsWith(root + path.sep))
-    throw new Error("CU401: output must be separate from Bake input");
-  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+function loadProgram(root: string, sourcesListed: readonly string[]): { program: ts.Program; paths: string[] } {
   const paths = sourcesListed.map(relative => {
     if (typeof relative !== "string" || path.isAbsolute(relative)) throw new Error("CU003: invalid source path");
     const file = path.resolve(root, relative);
@@ -122,6 +116,17 @@ export function compile(request: CompileRequest): CompileResult {
       getCanonicalFileName: name => name, getCurrentDirectory: () => root, getNewLine: () => "\n"
     }));
   }
+  return { program, paths };
+}
+
+export function compile(request: CompileRequest): CompileResult {
+  const manifestPath = path.resolve(request.manifestPath);
+  const root = path.dirname(manifestPath);
+  const destination = path.resolve(request.outputDir);
+  if (destination === root || root.startsWith(destination + path.sep) || destination.startsWith(root + path.sep))
+    throw new Error("CU401: output must be separate from Bake input");
+  const sourcesListed = readManifest(fs.readFileSync(manifestPath, "utf8"));
+  const { program, paths } = loadProgram(root, sourcesListed);
   const ctx: Context = new Context(program, root);
   const emitter = new Emitter(ctx);
   const sources = paths.map(file => {
