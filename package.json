@@ -12,13 +12,13 @@
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test dist/test/*.test.js",
     "compile": "node dist/src/cli.js",
-    "guards": "code-guards all --strict --path . --include-tests"
+    "guards": "bash scripts/guards.sh"
   },
   "dependencies": {
     "typescript": "~5.8.3"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#bb8e3a434ef254eef2e6ce7b5a55c3ab69e813d2"
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#b858b0e0a912b1315fde3203d1e7bcc2ff2d5427"
   }
 }
