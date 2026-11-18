@@ -49,3 +49,7 @@ integration tests. It is not required for other input projects.
 ## Licence
 
 [MIT](LICENSE).
+
+## Documentation
+
+[Compiler module reference](docs/index.md). Run `npm run guards` to check source code, tests and documentation in strict mode.
