@@ -1,0 +1,29 @@
+{
+  "name": "@kitty-crow/crust",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Bake-lowered TypeScript to freestanding Rust",
+  "bin": {
+    "crust": "./src/cli.ts"
+  },
+  "scripts": {
+    "build": "bun run guards && bun run check",
+    "check": "bun --bun tsc -p tsconfig.json --noEmit",
+    "test": "bun test --timeout 60000 test",
+    "test:source-contract": "bun test --timeout 60000 --test-name-pattern rejects test/compiler.test.ts",
+    "test:modular-rust": "bun test --timeout 60000 --test-name-pattern emits test/compiler.test.ts",
+    "compile": "bun src/cli.ts",
+    "guards": "bash scripts/guards.sh"
+  },
+  "dependencies": {
+    "typescript": "~5.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@kitty-crow/code-guards": "git+https://github.com/kitty-crow/code-guards.git#d1ce06c6b4a71e5f94ca97ba4b0f6780408aa3f6"
+  },
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}
