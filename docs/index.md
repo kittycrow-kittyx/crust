@@ -1,0 +1,10 @@
+# Crust module reference
+
+- [context](modules/context.md)
+- [emitter](modules/emitter.md)
+- [compiler](modules/compiler.md)
+- [cli](modules/cli.md)
+- [numbers](modules/numbers.md)
+- [thistle-project](modules/thistle-project.md)
+- [Manifest reader](modules/manifest.md)
+- [Arithmetic fixture](modules/test/fixtures/arithmetic.md)

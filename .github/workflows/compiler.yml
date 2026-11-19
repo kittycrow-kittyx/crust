@@ -1,0 +1,117 @@
+name: Transpiler validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate transpiler
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Strict Code Guards
+        run: bun run guards
+
+      - name: Type-check transpiler
+        run: bun run check
+
+      - name: Test source contracts
+        run: bun run test:source-contract
+
+      - name: Test modular Rust emission
+        run: bun run test:modular-rust
+
+  transpile:
+    name: Transpile source
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: |
+          bun install
+          bun install --cwd vendor/bake --frozen-lockfile
+
+      - name: Transpile fixture source
+        run: |
+          bun vendor/bake/src/cli.ts --project test/fixtures/tsconfig.json --out-dir "$GITHUB_WORKSPACE/build/ci-lowered" --target=rust --fail-on-warnings
+          bun src/cli.ts --manifest build/ci-lowered/bake-manifest.json --out-dir build/ci-generated
+
+      - name: Upload generated source
+        uses: actions/upload-artifact@v6
+        with:
+          name: generated-source
+          path: build/ci-generated/
+          if-no-files-found: error
+
+  validate-generated:
+    name: Validate generated source
+    needs: transpile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Download generated source
+        uses: actions/download-artifact@v7
+        with:
+          name: generated-source
+          path: build/ci-generated
+
+      - name: Validate generated source
+        shell: bash
+        env:
+          RUSTFLAGS: -D warnings -C panic=abort
+        run: |
+          set -euo pipefail
+          test -s build/ci-generated/crust.manifest.json
+          test -s build/ci-generated/src/arithmetic.rs
+          test -s build/ci-generated/src/lib.rs
+          jq -e '.schema == 1 and (.include | length > 0)' targets.json
+          while IFS= read -r profile; do
+            triple="$(jq -r '.target' <<< "$profile")"
+            toolchain="$(jq -r '.toolchain' <<< "$profile")"
+            build_std="$(jq -r '.buildStd' <<< "$profile")"
+            echo "Validating $triple ($toolchain)"
+            rustup toolchain install "$toolchain" --profile minimal
+            if [[ "$build_std" == true ]]; then
+              rustup component add rust-src --toolchain "$toolchain"
+              rustc +"$toolchain" --print target-list | grep -Fx "$triple"
+              cargo +"$toolchain" check -Z build-std=core,compiler_builtins --manifest-path build/ci-generated/Cargo.toml --target "$triple" --lib
+            else
+              rustup target add "$triple" --toolchain "$toolchain"
+              cargo +"$toolchain" check --manifest-path build/ci-generated/Cargo.toml --target "$triple" --lib
+            fi
+          done < <(jq -c '.include[]' targets.json)
+
+      - name: Test generated Rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fx '#![no_std]' build/ci-generated/src/lib.rs
+          grep -Fx '#![forbid(unsafe_code)]' build/ci-generated/src/lib.rs
+          grep -F 'pub fn add<P: Platform>' build/ci-generated/src/arithmetic.rs
+          jq -e '.format == "freestanding-rust" and .intrinsicAbi == 1 and (.modules | any(.source == "arithmetic.ts" and .rustModule == "m_arithmetic"))' build/ci-generated/crust.manifest.json

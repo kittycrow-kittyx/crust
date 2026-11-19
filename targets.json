@@ -1,0 +1,53 @@
+{
+  "schema": 1,
+  "include": [
+    {
+      "arch": "amd64",
+      "target": "x86_64-unknown-none",
+      "elf": "ELF64",
+      "machine": "Advanced Micro Devices X86-64",
+      "toolchain": "stable",
+      "buildStd": false
+    },
+    {
+      "arch": "arm64",
+      "target": "aarch64-unknown-none",
+      "elf": "ELF64",
+      "machine": "AArch64",
+      "toolchain": "stable",
+      "buildStd": false
+    },
+    {
+      "arch": "riscv64",
+      "target": "riscv64gc-unknown-none-elf",
+      "elf": "ELF64",
+      "machine": "RISC-V",
+      "toolchain": "stable",
+      "buildStd": false
+    },
+    {
+      "arch": "riscv32",
+      "target": "riscv32imafc-unknown-none-elf",
+      "elf": "ELF32",
+      "machine": "RISC-V",
+      "toolchain": "stable",
+      "buildStd": false
+    },
+    {
+      "arch": "armv7",
+      "target": "armv7a-none-eabi",
+      "elf": "ELF32",
+      "machine": "ARM",
+      "toolchain": "stable",
+      "buildStd": false
+    },
+    {
+      "arch": "i686",
+      "target": "i686-unknown-none",
+      "elf": "ELF32",
+      "machine": "Intel 80386",
+      "toolchain": "nightly",
+      "buildStd": true
+    }
+  ]
+}
